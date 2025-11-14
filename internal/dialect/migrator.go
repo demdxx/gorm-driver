@@ -62,7 +62,7 @@ func (m Migrator) CreateTable(values ...interface{}) error { //nolint:funlen
 
 		tx.Statement.Context = ydbDriver.WithQueryMode(tx.Statement.Context, ydbDriver.SchemeQueryMode)
 
-		if err := m.RunWithValue(value, func(stmt *gorm.Statement) (err error) {
+		err := m.RunWithValue(value, func(stmt *gorm.Statement) (err error) {
 			var (
 				createTableSQL          = "CREATE TABLE ? ("
 				values                  = []interface{}{m.CurrentTable(stmt)}
@@ -146,7 +146,8 @@ func (m Migrator) CreateTable(values ...interface{}) error { //nolint:funlen
 			err = tx.Exec(createTableSQL, values...).Error
 
 			return xerrors.WithStacktrace(err)
-		}); err != nil {
+		})
+		if err != nil {
 			return xerrors.WithStacktrace(err)
 		}
 	}

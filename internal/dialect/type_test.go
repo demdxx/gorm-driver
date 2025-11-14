@@ -69,7 +69,7 @@ func Test_schemaFieldToColumnType(t *testing.T) { //nolint:funlen
 			},
 			typesType: types.TypeBool,
 			options: []toColumnTypeOption{
-				func(columnType *migrator.ColumnType) error {
+				func(_ *migrator.ColumnType) error {
 					return errors.New("some error")
 				},
 			},
