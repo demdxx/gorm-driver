@@ -48,7 +48,7 @@ func TestMigrator_FullDataTypeOf(t *testing.T) { //nolint:funlen
 			},
 		},
 		{
-			name: "panic on NOT NULL for non-PrimaryKey column",
+			name: "No panic on NOT NULL for non-PrimaryKey column",
 			field: &schema.Field{
 				DataType:          schema.Bool,
 				IndirectFieldType: reflect.TypeOf(false),
@@ -58,7 +58,10 @@ func TestMigrator_FullDataTypeOf(t *testing.T) { //nolint:funlen
 				Name:    "TABLE",
 				NotNull: true,
 			},
-			isPanics: true,
+			isPanics: false,
+			expr: clause.Expr{
+				SQL: "Bool NOT NULL",
+			},
 		},
 		{
 			name: "panic on UNIQUE",
