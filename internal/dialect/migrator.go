@@ -33,16 +33,6 @@ func (m Migrator) FullDataTypeOf(field *schema.Field) (expr clause.Expr) {
 	expr.SQL = m.DataTypeOf(field)
 
 	if field.NotNull {
-		if !field.PrimaryKey {
-			//nolint:godox
-			// TODO: implement after support NOT NULL for non-PrimaryKey columns
-			panic(
-				fmt.Sprintf("model %s, table %s: not null supported only for PrimaryKey in ydb",
-					field.Schema.Name,
-					field.Name,
-				),
-			)
-		}
 		expr.SQL += " NOT NULL"
 	}
 
@@ -265,9 +255,72 @@ func (m Migrator) DropColumn(value interface{}, name string) error {
 	})
 }
 
-// AlterColumn alter value's `field` column type based on schema definition.
-func (m Migrator) AlterColumn(_ interface{}, field string) error {
-	return xerrors.WithStacktrace(fmt.Errorf("field `%s`: alter column not supported", field))
+// AlterColumn alter value's `name` column type based on schema definition.
+func (m Migrator) AlterColumn(value interface{}, name string) error {
+	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
+		// avoid using the same name field
+		if stmt.Schema == nil {
+			return errors.New("failed to get schema")
+		}
+		f := stmt.Schema.LookUpField(name)
+		if f == nil {
+			return xerrors.WithStacktrace(fmt.Errorf("failed to look up field with name: %s", name))
+		}
+		if f.IgnoreMigration {
+			return nil
+		}
+
+		// Use SchemeQueryMode for DDL operations
+		ctx := ydbDriver.WithQueryMode(context.Background(), ydbDriver.SchemeQueryMode)
+		table := m.CurrentTable(stmt)
+		column := clause.Column{Name: f.DBName}
+		columnType := m.DB.Migrator().FullDataTypeOf(f)
+		columnTmp := clause.Column{Name: f.DBName + "_tmp"}
+
+		// YDB does not support direct ALTER COLUMN to change data type and RENAME COLUMN.
+		// So we need to do it in 6 steps:
+
+		// 1. Create new column with the desired schema
+		err := m.DB.WithContext(ctx).
+			Exec("ALTER TABLE ? ADD ? ?", table, columnTmp, columnType).Error
+		if err != nil {
+			return xerrors.WithStacktrace(err)
+		}
+
+		// 2. Copy data from old column to new column
+		err = m.DB.WithContext(ctx).
+			Exec("UPDATE ? SET ? = CAST(? AS ?)", table, columnTmp, column, columnType).Error
+		if err != nil {
+			return xerrors.WithStacktrace(err)
+		}
+
+		// 3. Drop old column
+		dropErr := m.DB.WithContext(ctx).
+			Exec("ALTER TABLE ? DROP COLUMN ?", table, column).Error
+		if dropErr != nil {
+			return xerrors.WithStacktrace(dropErr)
+		}
+
+		// 4. Add new column with the original name
+		err = m.DB.WithContext(ctx).
+			Exec("ALTER TABLE ? ADD ? ?", table, column, columnType).Error
+		if err != nil {
+			return xerrors.WithStacktrace(err)
+		}
+
+		// 5. Copy data from temporary column to the new column
+		err = m.DB.WithContext(ctx).
+			Exec("UPDATE ? SET ? = ?", table, column, columnTmp).Error
+		if err != nil {
+			return xerrors.WithStacktrace(err)
+		}
+
+		// 6. Drop temporary column
+		err = m.DB.WithContext(ctx).
+			Exec("ALTER TABLE ? DROP COLUMN ?", table, columnTmp).Error
+
+		return xerrors.WithStacktrace(err)
+	})
 }
 
 // ColumnTypes return columnTypes []gorm.ColumnType and execErr error.
